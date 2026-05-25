@@ -136,7 +136,7 @@ The output file is automatically saved in the working directory (`src/` when you
 We adhere to the original settings specified in their uploaded codes, allowing for straightforward replication. Please refer to the detailed guidance provided for each type of watermark by accessing the following resources:
 - KGW: [KGW](https://github.com/jwkirchenbauer/lm-watermarking)
 - SynthID: [SynthID](https://github.com/google-deepmind/synthid-text)
-- SafeSeal: [SafeSeal](https://anonymous.4open.science/r/SafeSeal-8E76))
+- SafeSeal: [SafeSeal](https://anonymous.4open.science/r/SafeSeal-8E76)
 
 
 Enjoy the code!
