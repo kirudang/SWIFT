@@ -1,59 +1,58 @@
-# SWIFT
-# vLLM Batching — Generation + Watermarking
 
-End-to-end pipeline that **generates text with vLLM**, splits it into sentences, **watermarks each sentence** (synonym substitution), and writes JSON results. Designed for **two GPUs**: one engine for generation, one for watermarking, connected by bounded multiprocessing queues.
-
-## What it does
-
-For each input prompt:
-
-1. **Generate** continuation text (streaming AsyncLLM when available).
-2. **Split** the stream into sentences (`.`, `!`, `?` boundaries).
-3. **Watermark** each sentence: detect replaceable words → LLM synonyms → tournament pick → apply replacements.
-4. Save **`Original_output`** (generated) and **`Watermarked_output`** (after substitutions).
-
-## Repository layout
-
-| File | Purpose |
-|------|---------|
-| `Generation.py` | Main entry point: CLI, gen engine, queues, worker process, output JSON |
-| `utils.py` | Watermark LLM (detect + synonyms), JSON parsing, validation, tournament driver |
-| `Tournament_randomization.py` | Deterministic HMAC tournament to choose one synonym per target word |
-
+# SWIFT Watermark
 ## Requirements
-
-- Python 3.10+
-- CUDA GPUs (recommended: **2 GPUs** — `--gen_gpu` and `--wm_gpu`)
-- [vLLM](https://docs.vllm.ai/) with AsyncLLM support (v1) for streaming generation
-
-Example dependencies (adjust versions to your cluster):
-
-```
-torch>=2.5
-transformers>=4.46
-vllm>=0.6
-nltk>=3.9
-pydantic>=2.9
-```
-
-Set cache paths before running (edit in `Generation.py` / `utils.py` or via env):
-
-- `HF_HOME` — Hugging Face model cache
-- `HF_TOKEN` — if needed for gated models (do not commit tokens)
-
-Download NLTK data once if needed:
+To facilitate the setup, we recommend creating a separate environment and installing the necessary packages from `requirements.txt`. The experiments were conducted on Python 3.10+, using **two NVIDIA GPUs** (one for text generation, one for watermarking) with PyTorch (`torch==2.5.1`), vLLM (`vllm==0.6.4.post1`), and CUDA 12.
 
 ```bash
+pip install -r requirements.txt
 python -c "import nltk; nltk.download('punkt')"
 ```
 
-## Quick start
+## I. SWIFT Watermarking
+All code related to our paper is located in the `src/` folder. Sample dataset notes and C4 download links are in `data/data.txt`. Instructions are as below:
+
+### 1. End-to-End Generation and Watermarking
+The repository root contains `src/Generation.py` (main entry point), `src/utils.py` (detect/generate synonyms, validation, tournament driver), and `src/Tournament_randomization.py` (deterministic HMAC tournament).
+
+This pipeline **generates** continuations from prompts with vLLM, splits them into sentences, then **watermarks** each sentence via LLM-based synonym detection and tournament sampling. Generation and watermarking run on **separate GPUs** with bounded multiprocessing queues.
+
+**First, set up the environment variables in `src/Generation.py` and `src/utils.py`:**
+- `os.environ["HF_TOKEN"]` = `'Your_HuggingFace_Token'` # Hugging Face token for gated models
+- `cache_dir` = `'Your/Cache/Directory'` # Directory for model caching (`HF_HOME`)
+
+**Then run from the `src/` directory:**
 
 ```bash
-cd vLLM-batching
+cd src
+python Generation.py [arguments]
+```
 
+**Data input parameters:**
+- `--data`: Path to input JSON file (list of prompts). Each item may be a string or a dict with `input` or `Input`.
+- `--prompt_pt`: Path to a Torch prompt file (used when `--data` is omitted; same layout as `c4_prompt_test.pt`)
+- `--data_model`: Dataset model tag for output naming (choices: `'Llama3'`, `'Misrtal'`, `'DeepSeek'`, `'Qwen'`, `'Gemma'`, default: `'Llama3'`)
+- `--split`: Dataset split (choices: `'Test'`, `'Train'`, default: `'Test'`)
+- `--n_inputs`: Number of prompts to use from `--prompt_pt` (default: `20`)
+- `--max_inp_tokens`: Max prompt tokens kept before generation (default: `50`)
+- `--max_new_tokens`: Max new tokens to generate per prompt (default: `200`)
+
+**Note**: For JSON input (`--data`), the dataset should be in one of the following formats:
+```json
+[
+    {"input": "Your prompt here."},
+    "Or a plain string prompt."
+]
+```
+
+For C4 experiments, download the clean Train/Test `.pt` prompt files (see `data/data.txt`)
+
+**Example (C4 prompts via `--prompt_pt`):**
+```bash
+cd src
 python Generation.py \
   --prompt_pt /path/to/c4_prompt_test.pt \
+  --data_model Llama3 \
+  --split Test \
   --n_inputs 20 \
   --gen_gpu 0 \
   --wm_gpu 1 \
@@ -63,123 +62,81 @@ python Generation.py \
   --wm_sentence_batch_size 32
 ```
 
-Or from a JSON prompt list:
-
+**Example (JSON prompts via `--data`):**
 ```bash
+cd src
 python Generation.py \
-  --data /path/to/prompts.json \
+  --data ../data/prompts.json \
   --n_inputs 100 \
-  --gen_gpu 0 --wm_gpu 1
+  --gen_gpu 0 \
+  --wm_gpu 1
 ```
 
-Results are written to `<output_name>.json` in the working directory (name is built from model, split, watermark key, batch sizes, etc.).
+**Text generation parameters (`--gen_gpu`):**
+- `--model`: Hugging Face model id (default: `'meta-llama/Llama-3.1-8B-Instruct'`)
+- `--gen-temperature`: Generation temperature (`0` = greedy, default: `0.0`)
+- `--gen-top-p`: Nucleus sampling for generation (default: `1.0`)
+- `--gen_max_inflight`: Max concurrent streaming generation requests (default: `32`)
+- `--gen_gpu`: Physical GPU id for the generation engine (default: `0`)
 
-## Pipeline (high level)
+**Watermarking / candidate parameters (`--wm_gpu`):**
+- `--wm-temperature`: Temperature for watermark detect/generate JSON (`0` = greedy, default: `0.0`)
+- `--wm-top-p`: top_p for watermark LLM (default: `1.0`)
+- `--wm-detect-max-tokens`: Max tokens per sentence JSON (default: `512`; increase if JSON truncates)
+- `--wm-top-k`: Max synonym candidates kept per target word (default: `15`)
+- `--wm_gpu`: Physical GPU id for the watermark engine (default: `1`)
+- `--wm_sentence_batch_size`: Sentences per watermark vLLM batch (default: `32`)
+- `--wm_queue_maxsize`: Max queue size between gen and watermark processes (default: `256`)
+- `--wm-log-queue`: Log approximate watermark queue depths (flag)
 
-```
-Prompt
-  → [Gen GPU] stream tokens (--gen-temperature, --max_new_tokens)
-  → split into sentences
-  → queue batches → [WM GPU] worker process
-        → LLM: JSON {word: [synonyms]}  (utils.py)
-        → tournament pick per word       (Tournament_randomization.py)
-        → replace tokens in sentence     (apply_replacements)
-  → queue back → stitch sentences in order
-  → JSON {input, Original_output, Watermarked_output}
-```
+**Sampling parameters (tournament):**
+- `--secret_key`: Secret key for randomization (default: `'Adaptive_key_v1'`)
+- `--wm-m`: Number of tournament rounds (default: `6`)
+- `--wm-c`: Number of competitors per tournament match (default: `2`)
+- `--wm-h`: Left context tokens for tournament hashing (default: `4`)
+- `--wm-alpha`: Softmax temperature for tournament draws (default: `1.0`)
 
-**Two separate vLLM engines** load the same `--model` on different GPUs. Generation and watermarking do not share one runtime instance.
+**vLLM engine parameters:**
+- `--dtype`: Model dtype, e.g. `bfloat16`, `auto` (default: `bfloat16`)
+- `--vllm-model-quantization`: Weight quantization (optional)
+- `--enable-prefix-caching`: Reuse KV for shared watermark instruct prefix (default: on)
+- `--tensor_parallel_size`: Tensor parallel size (default: `1`)
 
-## Main CLI groups
+**Pipeline timing:**
+- `--warmup` / `--no-warmup`: Run one short gen+watermark request before timed batch (default: warmup on)
+- `--warmup-prompt`: Warmup input text (default: `'Hello.'`)
+- `--warmup-max-tokens`: Warmup generation length (default: `8`)
 
-### Data
+**Output format:**
+The script generates a JSON file with the following structure for each item:
+- `input`: Truncated input prompt
+- `Original_output`: Generated text (sentences concatenated in order)
+- `Watermarked_output`: Text after synonym replacements
+- `time`: Processing time for this item
 
-| Flag | Description |
-|------|-------------|
-| `--data` | JSON list of prompts (`input` / `Input` fields or strings) |
-| `--prompt_pt` | Torch prompt file (default if `--data` omitted) |
-| `--n_inputs` | Number of prompts to run |
-| `--max_inp_tokens` | Truncate prompt length |
-| `--max_new_tokens` | Max tokens to generate per prompt |
+The output file is automatically saved in the working directory (`src/` when you `cd src`) with a name following the pattern:
+`{model_slug}_Batching_wq{quant}_kv{kv_quant}_{kv_dtype}_{kv_scales}_{split}_{data_model}_E2E_KEY_{secret_key}_m{m}_c{c}_h{h}_alpha{alpha}_n{n}_in{max_inp}_new{max_new}_gen_inflight_{gen_inflight}_sentence_batch_{wm_batch}.json`
 
-### Text generation (`--gen_gpu`)
+**Note**: Embedding similarity is **disabled** in this release; all synonym candidates receive uniform weight in the tournament. Word choice is **deterministic** given `--secret_key`, sentence context, and candidates (HMAC-based tournament), not random LLM sampling. Use `--gen-temperature 0` and `--wm-temperature 0` for greedy decoding (minor vLLM/CUDA nondeterminism may still occur).
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--gen-temperature` | `0.0` | `0` = greedy / deterministic decode |
-| `--gen-top-p` | `1.0` | Nucleus sampling for generation |
-| `--gen_max_inflight` | `32` | Max concurrent streaming prompts (also gen `max_num_seqs`) |
+**Optional environment variables:**
+- `DETECT_MAX_TOKENS`: Override default max tokens for watermark JSON
+- `DISABLE_STRUCTURED_OUTPUTS=1`: Disable vLLM structured JSON schema
+- `WM_PARSE_DEBUG=1`: Print JSON parse failures
+- `WM_TOURNAMENT_USE_THREADS=1`: Optional threaded tournament
 
-### Watermarking (`--wm_gpu`)
+**Troubleshooting:**
+- Watermarked text equals original: JSON parse failed or fewer than 2 synonyms per word; try raising `--wm-detect-max-tokens`
+- OOM on generation GPU: lower `--gen_max_inflight`
+- OOM on watermark GPU: lower `--wm_sentence_batch_size`
+- Generation stalls: watermark queue full; lower `--gen_max_inflight` or use a second GPU (`--wm_gpu` different from `--gen_gpu`)
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--wm-temperature` | `0.0` | Greedy decode for detect/synonym JSON |
-| `--wm-top-p` | `1.0` | top_p for watermark LLM |
-| `--wm-detect-max-tokens` | `512` | Max tokens per sentence JSON (increase if JSON truncates) |
-| `--wm-top-k` | `15` | Max synonyms kept per target word |
-| `--wm-m`, `--wm-c` | `6`, `2` | Tournament rounds and bracket size |
-| `--wm-h` | `4` | Left context tokens for tournament hashing |
-| `--wm-alpha` | `1.0` | Softmax temperature in tournament (similarities are uniform) |
-| `--secret_key` | `Adaptive_key_v1` | Secret key for deterministic tournament |
-| `--wm_sentence_batch_size` | `32` | Sentences per watermark vLLM batch |
+## II. Other Watermark Implementation
 
-### Queues / batching
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--wm_queue_maxsize` | `256` | Backpressure between gen and watermark processes |
-| `--wm-log-queue` | off | Log approximate queue depths |
-
-### Model / vLLM
-
-| Flag | Description |
-|------|-------------|
-| `--model` | Hugging Face model id (default: `meta-llama/Llama-3.1-8B-Instruct`) |
-| `--dtype` | e.g. `bfloat16`, `auto` |
-| `--vllm-model-quantization` | Weight quant (e.g. W4A16 checkpoint) |
-| `--enable-prefix-caching` | Reuse KV for shared watermark prompt prefix |
-
-## Output format
-
-Each item in the output JSON array:
-
-```json
-{
-  "input": "<truncated prompt>",
-  "Original_output": "<full generated text, sentences concatenated in order>",
-  "Watermarked_output": "<same structure with synonym replacements>",
-  "time": 0.0
-}
-```
-
-## Determinism notes
-
-- **Generation:** `--gen-temperature 0` → greedy decode (subject to vLLM/CUDA nondeterminism).
-- **Watermark LLM:** `--wm-temperature 0` → greedy JSON generation.
-- **Word choice:** Tournament is **deterministic** given `--secret_key`, sentence context, and candidates (HMAC-based), not random LLM sampling.
-
-Embedding similarity is **disabled**; all candidates use uniform weight in the tournament.
-
-## Environment variables
-
-| Variable | Effect |
-|----------|--------|
-| `DETECT_MAX_TOKENS` | Default max tokens for watermark JSON (overrides code default if set) |
-| `DISABLE_STRUCTURED_OUTPUTS=1` | Disable vLLM structured JSON schema |
-| `WM_PARSE_DEBUG=1` | Print JSON parse failures (otherwise skipped silently) |
-| `WM_TOURNAMENT_USE_THREADS=1` | Optional threaded tournament (usually off) |
-
-## Troubleshooting
-
-| Issue | Try |
-|-------|-----|
-| Watermarked text equals original | JSON parse failed or &lt;2 synonyms per word; raise `--wm-detect-max-tokens` |
-| OOM on gen GPU | Lower `--gen_max_inflight` |
-| OOM on wm GPU | Lower `--wm_sentence_batch_size` |
-| Gen waits / stalls | Watermark slower than gen; normal with full queue — lower `--gen_max_inflight` or speed up wm GPU |
-| AsyncLLM not found | Falls back to sync one-shot generation per prompt (no token streaming) |
-
-## License
+We adhere to the original settings specified in their uploaded codes, allowing for straightforward replication. Please refer to the detailed guidance provided for each type of watermark by accessing the following resources:
+- KGW: [KGW](https://github.com/jwkirchenbauer/lm-watermarking)
+- SynthID: [SynthID](https://github.com/google-deepmind/synthid-text)
+- SafeSeal: [SafeSeal](https://anonymous.4open.science/r/SafeSeal-8E76))
 
 
+Enjoy the code!
