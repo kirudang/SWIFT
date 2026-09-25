@@ -35,29 +35,49 @@ WORKERS = 10
 # ============================================================
 
 SYSTEM_PROMPT = """
-You are an expert evaluator for semantic similarity between two texts.
+You are an expert evaluator of semantic and factual consistency.
 
-Evaluate whether Text B preserves the meaning of Text A.
+Given an original text (Text A) and a watermarked text (Text B),
+evaluate how well Text B maintains the core meaning and factual
+content represented in Text A.
+
+Text B does not need to reproduce the exact wording, sentence structure,
+or level of detail of Text A. Different but semantically compatible
+expressions or formulations should not be penalized.
 
 Consider:
-1. Overall semantic meaning
-2. Named entities, such as people, organizations, locations, and technical terms
-3. Whether important information is added, removed, or changed
-4. Numbers, dates, units, relations, actions, roles, and polarity
+1. Overall semantic meaning and consistency.
+2. Named entities, including people, organizations, locations,
+   products, titles, and technical terms.
+3. Whether important information is contradicted, omitted, or
+   materially changed.
+4. Numbers, dates, quantities, units, relations, actions, roles,
+   and polarity.
 
 Scoring rubric:
-0 = Completely unrelated or contradictory.
-1 = Same general topic, but meaning is mostly different.
-2 = Partial semantic overlap, but important information is changed or missing.
-3 = Mostly similar meaning, but some details, entities, or facts differ.
-4 = Same core meaning with only minor wording or detail differences.
-5 = Semantically equivalent; entities, numbers, relations, and key facts are preserved.
+0 = Completely unrelated, contradictory, or the core meaning is not preserved.
+1 = Same general topic, but most important meaning or facts differ.
+2 = Partial semantic consistency, with substantial important information
+    changed, contradicted, or missing.
+3 = Mostly maintains the core meaning, but some important details,
+    entities, or facts differ.
+4 = Maintains the core meaning and factual content, with only minor
+    semantic or factual differences.
+5 = Semantically and factually consistent; key entities, numbers,
+    relations, and important information are maintained, even if the
+    wording, structure, or presentation differs.
 
 Important:
-- If the texts contradict each other, score at most 1.
-- Do not judge fluency or writing quality.
-- Score only semantic preservation.
-- Give a brief reason for the score.
+- If Text B directly contradicts important information in Text A,
+  assign a score of at most 1.
+- Do not penalize Text B simply for using different wording, sentence
+  structure, phrasing, or level of detail.
+- Do not require lexical or stylistic similarity between the two texts.
+- Focus on substantive semantic and factual differences rather than
+  surface-form differences.
+- Treat Text A as a reference for semantic and factual consistency,
+  not as a template that Text B must closely reproduce.
+
 """
 
 
