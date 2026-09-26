@@ -1,7 +1,6 @@
-# SWIFT Watermark
 Code for **SWIFT**: Adaptive Co-Serving LLM Watermarking on Modern Inference Engines
 ## Requirements
-To facilitate the setup, we recommend creating a separate environment and installing the necessary packages from `requirements.txt`. The experiments were conducted on Python 3.10+, using **two NVIDIA GPUs** (one for text generation, one for watermarking) with PyTorch (`torch==2.5.1`), vLLM (`vllm==0.6.4.post1`), and CUDA 12.
+To facilitate the setup, we recommend creating a separate environment and installing the necessary packages from `requirements.txt`. The experiments were conducted on Python 3.10+, PyTorch (`torch==2.5.1`), vLLM (`vllm==0.6.4.post1`), and CUDA 12.
 
 
 ```bash
